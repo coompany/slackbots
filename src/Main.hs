@@ -16,7 +16,7 @@ import System.Exit (exitSuccess)
 asanaClient :: IO Asana.AsanaClient
 asanaClient = do
     t <- getEnv "ASANA_TOKEN"
-    return $ Asana.mkClient (Just (Asana.Token (Just Asana.Bearer) t))
+    return $ Asana.mkClient (Asana.Token (Just Asana.Bearer) t)
 
 
 makeRequest :: Show a => ClientM (Asana.Reply a) -> IO String

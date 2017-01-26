@@ -57,13 +57,13 @@ api :: Proxy AsanaAPI
 api = Proxy
 
 -- Build a client given a token
-mkClient :: Maybe Token -> AsanaClient
+mkClient :: Token -> AsanaClient
 mkClient token = AsanaClient{..}
     where (projects :<|> projectTasks)
             :<|> workspaces
             :<|> (webhooks
                 :<|> newWebhook
-                :<|> delWebhook) = client api token
+                :<|> delWebhook) = client api $ Just token
 
 -- Get the right client environment to run the API client
 clientEnv :: IO ClientEnv
