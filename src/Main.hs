@@ -1,7 +1,11 @@
 module Main where
 
 import qualified Asana as Asana
+import Server
 
+import Control.Concurrent
+import Control.Concurrent.MVar
+import Control.Monad (forever)
 import Servant
 import Servant.Client
 import System.Environment (getEnv)
@@ -24,27 +28,65 @@ makeRequest cm = do
 
 
 handleInteraction :: String -> IO String
-handleInteraction "0" = exitSuccess
-handleInteraction "1" = do
+handleInteraction input = do
     client <- asanaClient
-    makeRequest (Asana.workspaces client)
-handleInteraction "2" = do
-    client <- asanaClient
-    makeRequest (Asana.projects client)
-handleInteraction "3" = do
-    putStrLn "Which project?"
-    line <- getLine
-    client <- asanaClient
-    makeRequest (Asana.projectTasks client (read line :: Int))
-handleInteraction  _  = return "Unrecognized option"
+    case input of
+        "0" -> exitSuccess
+        "1" -> makeRequest (Asana.workspaces client)
+        "2" -> makeRequest (Asana.projects client)
+        "3" -> do
+            line <- getInput "Which project?"
+            makeRequest (Asana.projectTasks client (read line :: Int))
+        "4" -> do
+            line <- getInput "Which workspace?"
+            makeRequest (Asana.webhooks client $ Just (read line :: Int))
+        "5" -> do
+            resource <- getInput "Which resource?"
+            target <- getInput "Which target?"
+            let webhook = Asana.WebhookNew (read resource :: Int) target
+            makeRequest (Asana.newWebhook client $ Asana.Request webhook)
+        "6" -> do
+            webhookId <- getInput "Which webhook?"
+            makeRequest (Asana.delWebhook client (read webhookId :: Int))
+        otherwise -> return "Unrecognized option"
+    where
+        getInput q = putStrLn q >>= return getLine
+
+
+onTermination :: (Show e, Show a) => MVar Bool -> (Either e a -> IO ())
+onTermination serverCom = onTermination'
+    where
+        onTermination' eit = do
+            putMVar serverCom True
+            case eit of
+                Left e -> error $ "ERROR: " ++ show e
+                Right a -> putStrLn $ "END: " ++ show a
+
+waitForServer :: MVar Bool -> IO ()
+waitForServer serverCom = do
+    sc <- takeMVar serverCom
+    if sc
+        then putStrLn "Server finished..."
+        else waitForServer serverCom
 
 
 main :: IO ()
 main = do
-    putStrLn "\nAsana explorer:\n\
-             \1 - Print workspaces;\n\
-             \2 - Print projects;\n\
-             \3 - Print tasks;\n\
-             \0 - Exit;\n"
-    getLine >>= handleInteraction >>= putStrLn
-    main
+    serverCom <- handleServerStart
+    forever interaction
+    where
+        handleServerStart = do
+            sc <- newMVar False
+            threadId <- forkFinally (runServer 8080) (onTermination sc)
+            putStrLn $ "Server runnning in threadId " ++ show threadId
+            return sc
+        interaction = do
+            putStrLn "\nAsana explorer:\n\
+                     \1 - Print workspaces;\n\
+                     \2 - Print projects;\n\
+                     \3 - Print tasks;\n\
+                     \4 - Print webhooks;\n\
+                     \5 - New webhook;\n\
+                     \6 - Delete webhook;\n\
+                     \0 - Exit;\n"
+            getLine >>= handleInteraction >>= putStrLn
