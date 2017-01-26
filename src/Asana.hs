@@ -7,6 +7,7 @@ module Asana (
     Reply(..),
     Project(..),
     Task(..),
+    Workspace(..),
     AsanaClient(..),
     Token(..),
     TokenType(..),
@@ -43,10 +44,20 @@ instance FromJSON Task where
         Task <$> o .: "id" <*> o.: "name"
 
 
+data Workspace = Workspace {
+    workspaceId :: Int,
+    workspaceName :: String
+} deriving (Show)
+instance FromJSON Workspace where
+    parseJSON = withObject "workspace" $ \o -> do
+        Workspace <$> o .: "id" <*> o .: "name"
+
+
 -- Generic reply definition (all replies have a single `data` property)
 data Reply a = Reply a deriving (Show)
 type ProjectsReply = Reply [Project]
 type TasksReply = Reply [Task]
+type WorkspacesReply = Reply [Workspace]
 instance FromJSON a => FromJSON (Reply a) where
     parseJSON = withObject "reply" $ \o -> do
         Reply <$> o .: "data"
@@ -55,15 +66,18 @@ instance FromJSON a => FromJSON (Reply a) where
 -- API description
 type AsanaAPI =
     "api" :> "1.0" :> Header "Authorization" Token :>
-        "projects" :>
-        (    Get '[JSON] ProjectsReply
-        :<|> Capture "projectId" Int :> "tasks" :> Get '[JSON] TasksReply
+        (   "projects" :>
+                (    Get '[JSON] ProjectsReply
+                :<|> Capture "projectId" Int :> "tasks" :> Get '[JSON] TasksReply
+                )
+        :<|> "workspaces" :> Get '[JSON] WorkspacesReply
         )
 
 -- Client description
 data AsanaClient = AsanaClient {
     projects :: ClientM ProjectsReply,
-    projectTasks :: Int -> ClientM TasksReply
+    projectTasks :: Int -> ClientM TasksReply,
+    workspaces :: ClientM WorkspacesReply
 }
 
 -- OAuth related types
@@ -80,7 +94,7 @@ api = Proxy
 -- Build a client given a token
 mkClient :: Maybe Token -> AsanaClient
 mkClient token = AsanaClient{..}
-    where projects :<|> projectTasks = client api token
+    where (projects :<|> projectTasks) :<|> workspaces = client api token
 
 -- Get the right client environment to run the API client
 clientEnv :: IO ClientEnv
