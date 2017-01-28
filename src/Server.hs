@@ -1,33 +1,53 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Server (
     runServer
 ) where
 
+import Data.Asana (Events(..), Event(..))
 
 import Servant
+import Control.Monad.IO.Class (liftIO)
+import Data.List (intercalate)
 import Network.Wai.Handler.Warp (run)
 
 
 
+instance MimeUnrender OctetStream (Maybe Events) where
+    mimeUnrender _ _ = Right Nothing
+
+type XHookSecHeader = Header "X-Hook-Secret" String
+type XHookSigHeader = Header "X-Hook-Signature" String
+
 type ServerAPI =
-    "webhooks" :>
-        (       Header "X-Hook-Secret" String :> Post '[JSON] (Headers '[Header "X-Hook-Secret" String] ())
-        :<|>    Post '[JSON] String
-        )
+    "webhooks" :> XHookSecHeader
+               :> XHookSigHeader
+               :> ReqBody '[JSON, OctetStream] (Maybe Events)
+               :> Post '[JSON] (Headers '[XHookSecHeader] NoContent)
 
 server :: Server ServerAPI
-server = handleHook :<|> handleWebhook
+server = handleWebhook
 
-handleHook :: Maybe String -> Handler (Headers '[Header "X-Hook-Secret" String] ())
-handleHook (Just secret) = return $ addHeader secret ()
-handleHook Nothing = return $ addHeader "" ()
+handleWebhook :: Maybe String ->
+                 Maybe String ->
+                 Maybe Events ->
+                 Handler (Headers '[XHookSecHeader] NoContent)
+handleWebhook (Just secret) _ _ = return $ addHeader secret NoContent
+handleWebhook _ (Just signature) (Just (Events events)) = do
+    _ <- liftIO $ putStrLn $ show signature ++ "\n\n" ++ prettyEvents
+    return $ addHeader "" NoContent
+    where
+        prettyEvent (Event res usr ty act) =
+            "Resource:\t" ++ show res ++ "\n" ++
+            "User:\t" ++ show usr ++ "\n" ++
+            "Type:\t" ++ ty ++ "\n" ++
+            "Action:\t" ++ act
+        prettyEvents = intercalate "\n\n" $ map prettyEvent events
 
-handleWebhook :: Handler String
--- TODO code me
-handleWebhook = return "Hello"
 
 
 serverAPI :: Proxy ServerAPI
