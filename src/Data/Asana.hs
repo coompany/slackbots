@@ -1,28 +1,22 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 
-module Asana.Data (
+module Data.Asana (
     Token(..),
     TokenType(..),
-    Reply(..),
     Request(..),
-    DeleteReply,
+    Empty,
     Project(..),
-    ProjectsReply,
     Task(..),
-    TasksReply,
     Workspace(..),
-    WorkspacesReply,
     Webhook(..),
-    WebhooksReply,
     WebhookNew(..),
     WebhookNewRequest,
-    WebhookReply
+    Events(..), Event(..)
 ) where
 
 import Data.Aeson
-import Data.Text (pack)
-import Servant.API (ToHttpApiData(..))
+import GHC.Generics
 
 
 
@@ -54,11 +48,12 @@ instance FromJSON Workspace where
 
 
 data WebhookResource = WebhookResource {
-    resourceId :: Int
+    resourceId :: Int,
+    resourceName :: String
 } deriving (Show)
 instance FromJSON WebhookResource where
     parseJSON = withObject "resource" $ \o -> do
-        WebhookResource <$> o .: "id"
+        WebhookResource <$> o .: "id" <*> o .: "name"
 
 data Webhook = Webhook {
     webhookId :: Int,
@@ -75,23 +70,29 @@ instance ToJSON WebhookNew where
         object [ "resource" .= resource, "target" .= target ]
 
 
--- Generic reply definition (all replies have a single `data` property)
-data Reply a = Reply a deriving (Show)
 -- Empty type holds empty objects and is used for empty replies
 data Empty = Empty deriving (Show)
-type DeleteReply = Reply Empty
-type ProjectsReply = Reply [Project]
-type TasksReply = Reply [Task]
-type WorkspacesReply = Reply [Workspace]
-type WebhooksReply = Reply [Webhook]
-type WebhookReply = Reply Webhook
--- Replies are objects with the data property only
-instance FromJSON a => FromJSON (Reply a) where
-    parseJSON = withObject "reply" $ \o -> do
-        Reply <$> o .: "data"
--- Empty data are empty objects
 instance FromJSON Empty where
-    parseJSON = withObject "empty" $ \o -> return Empty
+    parseJSON = withObject "empty" $ \_ -> return Empty
+
+
+-- Events objects posted by Asana to webhook targets
+data Events = Events { events :: [Event] } deriving (Show, Generic)
+instance FromJSON Events
+
+data Event = Event {
+    eventResource :: Int,
+    eventUser :: Int,
+    eventType :: String,
+    eventAction :: String
+} deriving (Show)
+instance FromJSON Event where
+    parseJSON = withObject "event" $ \o -> do
+        Event <$> o .: "resource"
+              <*> o .: "user"
+              <*> o .: "type"
+              <*> o .: "action"
+
 
 -- Generic request definition (all requests have a single `data` property)
 data Request a = Request a deriving (Show)
@@ -103,6 +104,3 @@ instance ToJSON a => ToJSON (Request a) where
 -- OAuth related types
 data TokenType = Bearer deriving Show
 data Token = Token (Maybe TokenType) String deriving Show
-instance ToHttpApiData Token where
-    toUrlPiece (Token Nothing tok) = pack tok
-    toUrlPiece (Token (Just Bearer) tok) = pack $ "Bearer " ++ tok
