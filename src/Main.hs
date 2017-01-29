@@ -1,16 +1,16 @@
 module Main where
 
-import qualified Asana as Asana
-import Server
+import qualified Asana
+import           Server
 
-import Control.Concurrent
-import Control.Concurrent.MVar
-import Control.Monad (forever)
-import Data.List (intercalate)
-import Servant
-import Servant.Client
-import System.Environment (getEnv)
-import System.Exit (exitSuccess)
+import           Control.Concurrent
+import           Control.Concurrent.MVar
+import           Control.Monad           (forever)
+import           Data.List               (intercalate)
+import           Servant
+import           Servant.Client
+import           System.Environment      (getEnv)
+import           System.Exit             (exitSuccess)
 
 
 
@@ -20,11 +20,8 @@ asanaClient = do
     return $ Asana.mkClient (Asana.Token (Just Asana.Bearer) t)
 
 
-makeRequest :: (Show a) => ClientM a -> (a -> String) -> IO String
-makeRequest cm f = mapReply =<< runClientM cm =<< Asana.clientEnv
-    where
-        mapReply (Left err) = return $ "Error:\n" ++ show err
-        mapReply (Right reply) = return (f reply)
+mkAsanaRequest :: ClientM a -> (a -> String) -> IO String
+mkAsanaRequest cm f = Asana.mkRequest cm f (\e -> "Error:\n" ++ show e)
 
 
 handleInteraction :: String -> IO String
@@ -32,40 +29,40 @@ handleInteraction input = do
     client <- asanaClient
     case input of
         "0" -> exitSuccess
-        "1" -> makeRequest (Asana.workspaces client) showWorkspaces
-        "2" -> makeRequest (Asana.projects client) showProjects
+        "1" -> mkAsanaRequest (Asana.workspaces client) showWorkspaces
+        "2" -> mkAsanaRequest (Asana.projects client) showProjects
         "3" -> do
             line <- getInput "Which project?"
             let request = Asana.projectTasks client (read line :: Int)
-            makeRequest request showTasks
+            mkAsanaRequest request showTasks
         "4" -> do
             line <- getInput "Which workspace?"
             let request = Asana.webhooks client $ Just (read line :: Int)
-            makeRequest request show
+            mkAsanaRequest request show
         "5" -> do
             resource <- getInput "Which resource?"
             target <- getInput "Which target?"
             let webhook = Asana.WebhookNew (read resource :: Int) target
                 request = Asana.newWebhook client $ Asana.Request webhook
-            makeRequest request show
+            mkAsanaRequest request show
         "6" -> do
             webhookId <- getInput "Which webhook?"
             let request = Asana.delWebhook client (read webhookId :: Int)
-            makeRequest request show
-        otherwise -> return "Unrecognized option"
+            mkAsanaRequest request show
+        _ -> return "Unrecognized option"
     where
         getInput q = putStrLn q >>= return getLine
         prettyPrintList f xs = intercalate "\n\n" $ map f xs
 
-        showWorkspaces ws = prettyPrintList showWorkspace ws
+        showWorkspaces = prettyPrintList showWorkspace
         showWorkspace (Asana.Workspace id name) =
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
-        showProjects ps = prettyPrintList showProject ps
+        showProjects = prettyPrintList showProject
         showProject (Asana.Project id name) =
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
-        showTasks ts = prettyPrintList showTask ts
+        showTasks = prettyPrintList showTask
         showTask (Asana.Task id name) =
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
@@ -76,7 +73,7 @@ onTermination serverCom = onTermination'
         onTermination' eit = do
             putMVar serverCom True
             case eit of
-                Left e -> error $ "ERROR: " ++ show e
+                Left e  -> error $ "ERROR: " ++ show e
                 Right a -> putStrLn $ "END: " ++ show a
 
 waitForServer :: MVar Bool -> IO ()

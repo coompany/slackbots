@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Data.Asana (
@@ -15,53 +15,53 @@ module Data.Asana (
     Events(..), Event(..)
 ) where
 
-import Data.Aeson
-import GHC.Generics
+import           Data.Aeson
+import           GHC.Generics
 
 
 
 data Project = Project {
-    projectId :: Int,
+    projectId   :: Int,
     projectName :: String
 } deriving Show
 instance FromJSON Project where
-    parseJSON = withObject "project" $ \o -> do
+    parseJSON = withObject "project" $ \o ->
         Project <$> o .: "id" <*> o .: "name"
 
 
 data Task = Task {
-    taskId :: Int,
+    taskId   :: Int,
     taskName :: String
 } deriving Show
 instance FromJSON Task where
-    parseJSON = withObject "task" $ \o -> do
+    parseJSON = withObject "task" $ \o ->
         Task <$> o .: "id" <*> o.: "name"
 
 
 data Workspace = Workspace {
-    workspaceId :: Int,
+    workspaceId   :: Int,
     workspaceName :: String
 } deriving (Show)
 instance FromJSON Workspace where
-    parseJSON = withObject "workspace" $ \o -> do
+    parseJSON = withObject "workspace" $ \o ->
         Workspace <$> o .: "id" <*> o .: "name"
 
 
 data WebhookResource = WebhookResource {
-    resourceId :: Int,
+    resourceId   :: Int,
     resourceName :: String
 } deriving (Show)
 instance FromJSON WebhookResource where
-    parseJSON = withObject "resource" $ \o -> do
+    parseJSON = withObject "resource" $ \o ->
         WebhookResource <$> o .: "id" <*> o .: "name"
 
 data Webhook = Webhook {
-    webhookId :: Int,
+    webhookId       :: Int,
     webhookResource :: WebhookResource,
-    webhookTarget :: String
+    webhookTarget   :: String
 } deriving (Show)
 instance FromJSON Webhook where
-    parseJSON = withObject "webhook" $ \o -> do
+    parseJSON = withObject "webhook" $ \o ->
         Webhook <$> o .: "id" <*> o .: "resource" <*> o .: "target"
 
 data WebhookNew = WebhookNew Int String deriving (Show)
@@ -77,17 +77,17 @@ instance FromJSON Empty where
 
 
 -- Events objects posted by Asana to webhook targets
-data Events = Events { events :: [Event] } deriving (Show, Generic)
+newtype Events = Events { events :: [Event] } deriving (Show, Generic)
 instance FromJSON Events
 
 data Event = Event {
     eventResource :: Int,
-    eventUser :: Int,
-    eventType :: String,
-    eventAction :: String
+    eventUser     :: Int,
+    eventType     :: String,
+    eventAction   :: String
 } deriving (Show)
 instance FromJSON Event where
-    parseJSON = withObject "event" $ \o -> do
+    parseJSON = withObject "event" $ \o ->
         Event <$> o .: "resource"
               <*> o .: "user"
               <*> o .: "type"
@@ -95,7 +95,7 @@ instance FromJSON Event where
 
 
 -- Generic request definition (all requests have a single `data` property)
-data Request a = Request a deriving (Show)
+newtype Request a = Request a deriving (Show)
 type WebhookNewRequest = Request WebhookNew
 instance ToJSON a => ToJSON (Request a) where
     toJSON (Request r) = object [ "data" .= r ]

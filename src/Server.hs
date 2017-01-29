@@ -1,19 +1,18 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeOperators         #-}
 
 module Server (
     runServer
 ) where
 
-import Data.Asana (Events(..), Event(..))
+import           Data.Asana               (Event (..), Events (..))
 
-import Servant
-import Control.Monad.IO.Class (liftIO)
-import Data.List (intercalate)
-import Network.Wai.Handler.Warp (run)
+import           Control.Monad.IO.Class   (liftIO)
+import           Data.List                (intercalate)
+import           Network.Wai.Handler.Warp (run)
+import           Servant
 
 
 

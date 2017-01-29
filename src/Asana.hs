@@ -1,9 +1,9 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE RecordWildCards       #-}
+{-# LANGUAGE TypeOperators         #-}
 
 module Asana (
     Token(..),
@@ -17,21 +17,22 @@ module Asana (
     WebhookNew(..),
     AsanaClient(..),
     clientEnv,
-    mkClient
+    mkClient,
+    mkRequest
 ) where
 
-import Data.Asana
+import           Data.Asana
+import qualified Utils
 
-import Servant.Client
-import Servant.API
-import Data.Proxy (Proxy(..))
-import Data.Aeson (ToJSON(..), FromJSON(..), decode, encode, Value)
-import Data.Aeson.Types (parseEither)
-import qualified Data.Map.Strict as Map
-import Data.Text (pack)
-import Network.HTTP.Client (newManager)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Media ((//))
+import           Data.Aeson         (FromJSON (..), ToJSON (..), Value, decode,
+                                     encode)
+import           Data.Aeson.Types   (parseEither)
+import qualified Data.Map.Strict    as Map
+import           Data.Proxy         (Proxy (..))
+import           Data.Text          (pack)
+import           Network.HTTP.Media ((//))
+import           Servant.API
+import           Servant.Client
 
 
 
@@ -46,14 +47,14 @@ instance (FromJSON a) => MimeUnrender DataJSON a where
         case decode input :: Maybe (Map.Map String Value) of
             Just hm ->
                 case Map.lookup "data" hm of
-                    Just d -> parseEither parseJSON d
+                    Just d  -> parseEither parseJSON d
                     Nothing -> Left "Error parsing DataJSON 'data'"
             Nothing -> Left "Error parsing DataJSON"
 
 
 -- Use OAuth token data-type as HTTP header
 instance ToHttpApiData Token where
-    toUrlPiece (Token Nothing tok) = pack tok
+    toUrlPiece (Token Nothing tok)       = pack tok
     toUrlPiece (Token (Just Bearer) tok) = pack $ "Bearer " ++ tok
 
 
@@ -74,12 +75,12 @@ type AsanaAPI =
 
 -- Client description
 data AsanaClient = AsanaClient {
-    projects :: ClientM [Project],
+    projects     :: ClientM [Project],
     projectTasks :: Int -> ClientM [Task],
-    workspaces :: ClientM [Workspace],
-    webhooks :: Maybe Int -> ClientM [Webhook],
-    newWebhook :: WebhookNewRequest -> ClientM Webhook,
-    delWebhook :: Int -> ClientM Empty
+    workspaces   :: ClientM [Workspace],
+    webhooks     :: Maybe Int -> ClientM [Webhook],
+    newWebhook   :: WebhookNewRequest -> ClientM Webhook,
+    delWebhook   :: Int -> ClientM Empty
 }
 
 
@@ -98,6 +99,9 @@ mkClient token = AsanaClient{..}
 
 -- Get the right client environment to run the API client
 clientEnv :: IO ClientEnv
-clientEnv = do
-    manager <- newManager tlsManagerSettings
-    return (ClientEnv manager (BaseUrl Https "app.asana.com" 443 ""))
+clientEnv = Utils.tlsClientEnv "app.asana.com" 443
+
+mkRequest :: ClientM a -> (a -> b) -> (ServantError -> b) -> IO b
+mkRequest cm f g = do
+    ce <- clientEnv
+    Utils.mkRequest ce cm f g
