@@ -8,6 +8,7 @@ module Slack (
     clientEnv,
     mkRequest,
     startListening,
+    startListeningDefault,
     EventHandler, RTMListener,
     ChannelInfo(..),
     UserInfo(..),
@@ -177,6 +178,9 @@ wsApp :: EventHandler a -> WS.ClientApp ()
 wsApp evtHandler conn = forever $ do
     msg <- WS.receiveData conn
     traverse_ evtHandler (decode msg :: Maybe Event)
+
+startListeningDefault :: String -> IO ()
+startListeningDefault token = startListening token defaultRTMListener
 
 defaultRTMListener :: RTMListener ()
 defaultRTMListener team users chans = \case
