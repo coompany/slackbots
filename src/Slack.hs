@@ -20,7 +20,6 @@ import qualified Utils
 
 import           Control.Monad          (forever)
 import           Data.Aeson
-import           Data.Aeson.Types       (Parser (..))
 import           Data.Foldable          (traverse_)
 import qualified Data.Map.Strict        as Map
 import           Data.Maybe             (fromMaybe)
@@ -38,30 +37,26 @@ import           Wuss                   (runSecureClient)
 
 
 
--- Common function to parse a datatype with "id" and "name" strings.
-parseIdName :: (String -> String -> a) -> Value -> Parser a
-parseIdName f = withObject "o" $ \o -> f <$> o .: "id" <*> o .: "name"
-
 data TeamInfo = TeamInfo
     { teamId   :: String
     , teamName :: String
     } deriving (Show)
 instance FromJSON TeamInfo where
-    parseJSON = parseIdName TeamInfo
+    parseJSON = Utils.parseIdName TeamInfo
 
 data UserInfo = UserInfo
     { userId   :: String
     , userName :: String
     } deriving (Show)
 instance FromJSON UserInfo where
-    parseJSON = parseIdName UserInfo
+    parseJSON = Utils.parseIdName UserInfo
 
 data ChannelInfo = ChannelInfo
     { channelId   :: String
     , channelName :: String
     } deriving (Show)
 instance FromJSON ChannelInfo where
-    parseJSON = parseIdName ChannelInfo
+    parseJSON = Utils.parseIdName ChannelInfo
 
 -- Reply of the rtm.start Slack Web API endpoint
 data RtmStartReply = RtmStartReply

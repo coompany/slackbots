@@ -17,6 +17,7 @@ module Data.Asana (
 
 import           Data.Aeson
 import           GHC.Generics
+import qualified Utils
 
 
 
@@ -25,8 +26,7 @@ data Project = Project {
     projectName :: String
 } deriving Show
 instance FromJSON Project where
-    parseJSON = withObject "project" $ \o ->
-        Project <$> o .: "id" <*> o .: "name"
+    parseJSON = Utils.parseIdName Project
 
 
 data Task = Task {
@@ -34,8 +34,7 @@ data Task = Task {
     taskName :: String
 } deriving Show
 instance FromJSON Task where
-    parseJSON = withObject "task" $ \o ->
-        Task <$> o .: "id" <*> o.: "name"
+    parseJSON = Utils.parseIdName Task
 
 
 data Workspace = Workspace {
@@ -43,8 +42,7 @@ data Workspace = Workspace {
     workspaceName :: String
 } deriving (Show)
 instance FromJSON Workspace where
-    parseJSON = withObject "workspace" $ \o ->
-        Workspace <$> o .: "id" <*> o .: "name"
+    parseJSON = Utils.parseIdName Workspace
 
 
 data WebhookResource = WebhookResource {
@@ -52,8 +50,7 @@ data WebhookResource = WebhookResource {
     resourceName :: String
 } deriving (Show)
 instance FromJSON WebhookResource where
-    parseJSON = withObject "resource" $ \o ->
-        WebhookResource <$> o .: "id" <*> o .: "name"
+    parseJSON = Utils.parseIdName WebhookResource
 
 data Webhook = Webhook {
     webhookId       :: Int,

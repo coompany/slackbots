@@ -67,14 +67,12 @@ handleInteraction input = do
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
 
-onTermination :: (Show e, Show a) => MVar Bool -> (Either e a -> IO ())
-onTermination serverCom = onTermination'
-    where
-        onTermination' eit = do
-            putMVar serverCom True
-            case eit of
-                Left e  -> error $ "ERROR: " ++ show e
-                Right a -> putStrLn $ "END: " ++ show a
+onTermination :: (Show e, Show a) => MVar Bool -> Either e a -> IO ()
+onTermination serverCom eit = do
+    putMVar serverCom True
+    case eit of
+        Left e  -> error $ "ERROR: " ++ show e
+        Right a -> putStrLn $ "END: " ++ show a
 
 waitForServer :: MVar Bool -> IO ()
 waitForServer serverCom = do
