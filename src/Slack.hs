@@ -19,24 +19,32 @@ module Slack (
 
 import qualified Utils
 
-import           Control.Monad          (forever)
+import           Control.Monad      (forever)
 import           Data.Aeson
-import           Data.Foldable          (traverse_)
-import qualified Data.Map.Strict        as Map
-import           Data.Maybe             (fromMaybe)
-import           Data.Proxy             (Proxy (..))
-import qualified Data.Text              as T
-import qualified Data.Text.IO           as T
-import           Data.Time.Calendar     (fromGregorian)
-import           Data.Time.Clock        (UTCTime (..), secondsToDiffTime)
-import           Data.Time.Format       (defaultTimeLocale, parseTimeM)
-import           Network.URI            (URI (..), URIAuth (..), parseURI)
-import qualified Network.WebSockets     as WS
+import           Data.Foldable      (traverse_)
+import qualified Data.Map.Strict    as Map
+import           Data.Maybe         (fromMaybe)
+import           Data.List          (isInfixOf)
+import           Data.Proxy         (Proxy (..))
+import qualified Data.Text          as T
+import qualified Data.Text.IO       as T
+import           Data.Time.Calendar (fromGregorian)
+import           Data.Time.Clock    (UTCTime (..), secondsToDiffTime)
+import           Data.Time.Format   (defaultTimeLocale, parseTimeM)
+import           Network.URI        (URI (..), URIAuth (..), parseURI)
+import qualified Network.WebSockets as WS
 import           Servant.API
 import           Servant.Client
-import           Wuss                   (runSecureClient)
+import           Wuss               (runSecureClient)
 
 
+
+data SelfInfo = SelfInfo
+    { selfId :: String
+    , selfName :: String
+    } deriving (Show)
+instance FromJSON SelfInfo where
+    parseJSON = Utils.parseIdName SelfInfo
 
 data TeamInfo = TeamInfo
     { teamId   :: String
@@ -62,18 +70,21 @@ instance FromJSON ChannelInfo where
 -- Reply of the rtm.start Slack Web API endpoint
 data RtmStartReply = RtmStartReply
     { rtmURL      :: String
+    , rtmSelf     :: SelfInfo
     , rtmTeam     :: TeamInfo
     , rtmUsers    :: [UserInfo]
     , rtmChannels :: [ChannelInfo] }
 instance FromJSON RtmStartReply where
     parseJSON (Object o) = RtmStartReply
         <$> o .: "url"
+        <*> o .: "self"
         <*> o .: "team"
         <*> o .: "users"
         <*> o .: "channels"
 instance Show RtmStartReply where
-    show (RtmStartReply url team@(TeamInfo tId tName) users chs) =
+    show (RtmStartReply url self@(SelfInfo sId sName) team@(TeamInfo tId tName) users chs) =
         "RTM start reply\n\
+        \Self: " ++ sId ++ " / " ++ sName ++ "\n\
         \URL: " ++ url ++ "\n\
         \Team: " ++ tId ++ " / " ++ tName ++ "\n\
         \Users: " ++ unwords (map userName users) ++ "\n\
@@ -96,11 +107,20 @@ data Event
         { msgEvtChannel :: String
         , msgEvtUser    :: String
         , msgEvtText    :: String
-        , msgEvtTs      :: EventTime }
+        , msgEvtTs      :: EventTime
+        , msgSubtype    :: Maybe MessageSubtype }
     | UserTypingEvt
         { utEvtChannel :: String
         , utEvtUser    :: String }
     deriving (Show)
+
+data MessageSubtype = MeMessage | ChannelJoin | ChannelLeave deriving (Show)
+instance FromJSON MessageSubtype where
+    parseJSON (String st) = case st of
+        "me_message" -> return MeMessage
+        "channel_join" -> return ChannelJoin
+        "channel_leave" -> return ChannelLeave
+        _ -> fail $ "unrecognized message subtype " ++ T.unpack st
 
 instance FromJSON Event where
     parseJSON = withObject "event" $ \o ->
@@ -110,6 +130,7 @@ instance FromJSON Event where
                 <*> o .: "user"
                 <*> o .: "text"
                 <*> o .: "ts"
+                <*> o .:? "subtype"
             "user_typing" -> UserTypingEvt
                 <$> o .: "channel"
                 <*> o .: "user"
@@ -157,19 +178,19 @@ buildChannelsMap = buildResourceMap channelId
 
 -- Names for those types should be self descriptive.
 type EventHandler a = Event -> IO a
-type RTMListener a = TeamInfo -> UsersMap -> ChannelsMap -> EventHandler a
+type RTMListener a = SelfInfo -> TeamInfo -> UsersMap -> ChannelsMap -> EventHandler a
 
 -- Initiate an RTM WebSockets channel. Accepts a token and an RTMListener.
 startListening :: String -> RTMListener a -> IO ()
 startListening token rtmListener =
     mkRequest (rtmStart (Just token)) Right Left >>= \case
         Left err -> putStrLn $ "Error:\n" ++ show err
-        Right rtm@(RtmStartReply url team users chs) ->
+        Right rtm@(RtmStartReply url self team users chs) ->
             print rtm >> case parseURI url of
                 Just (URI _ (Just (URIAuth _ host _)) path _ _) ->
                     let usersMap = buildUsersMap users
                         channelsMap = buildChannelsMap chs
-                        wsHandler = wsApp $ rtmListener team usersMap channelsMap
+                        wsHandler = wsApp $ rtmListener self team usersMap channelsMap
                     in runSecureClient host 443 path wsHandler
                 Nothing -> putStrLn "URI not parseable"
 
@@ -183,9 +204,18 @@ startListeningDefault :: String -> IO ()
 startListeningDefault token = startListening token defaultRTMListener
 
 defaultRTMListener :: RTMListener ()
-defaultRTMListener team users chans = \case
-    (MessageEvt ch us tx ts) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " wrote " ++ tx
+defaultRTMListener self team users chans = \case
+    (MessageEvt ch us tx ts Nothing) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++
+            if selfId self `isInfixOf` tx
+                then " mentioned " ++ selfName self ++ " [" ++ tx ++ "]"
+                else " wrote " ++ tx
+    (MessageEvt ch us tx ts (Just MeMessage)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is " ++ tx
+    (MessageEvt ch us tx ts (Just ChannelJoin)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " joined"
+    (MessageEvt ch us tx ts (Just ChannelLeave)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " left"
     (UserTypingEvt ch us) ->
         putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is typing"
     where
