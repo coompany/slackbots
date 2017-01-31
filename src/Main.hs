@@ -24,10 +24,8 @@ mkAsanaRequest :: ClientM a -> (a -> String) -> IO String
 mkAsanaRequest cm f = Asana.mkRequest cm f (\e -> "Error:\n" ++ show e)
 
 
-handleInteraction :: String -> IO String
-handleInteraction input = do
-    client <- asanaClient
-    case input of
+handleInteraction :: Asana.AsanaClient -> String -> IO String
+handleInteraction client input = case input of
         "0" -> exitSuccess
         "1" -> mkAsanaRequest (Asana.workspaces client) showWorkspaces
         "2" -> mkAsanaRequest (Asana.projects client) showProjects
@@ -63,7 +61,7 @@ handleInteraction input = do
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
         showTasks = prettyPrintList showTask
-        showTask (Asana.Task id name) =
+        showTask (Asana.Task id name _ _) =
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
 
 
@@ -85,19 +83,21 @@ waitForServer serverCom = do
 main :: IO ()
 main = do
     startSlack
-    serverCom <- handleServerStart
-    forever interaction
+    withClient <- asanaClient
+    serverCom <- handleServerStart withClient
+    forever (interaction withClient)
     where
         startSlack = do
             token <- getEnv "SLACK_TOKEN"
             threadId <- forkIO $ Slack.startListeningDefault token
             putStrLn $ "Slack bot running in " ++ show threadId
-        handleServerStart = do
+        handleServerStart client = do
             sc <- newMVar False
-            threadId <- forkFinally (Asana.runServer 8080) (onTermination sc)
+            threadId <- forkFinally (Asana.runServer 8080 client)
+                                    (onTermination sc)
             putStrLn $ "Server runnning in " ++ show threadId
             return sc
-        interaction = do
+        interaction client = do
             putStrLn "\nAsana explorer:\n\
                      \1 - Print workspaces;\n\
                      \2 - Print projects;\n\
@@ -106,4 +106,4 @@ main = do
                      \5 - New webhook;\n\
                      \6 - Delete webhook;\n\
                      \0 - Exit;\n"
-            getLine >>= handleInteraction >>= putStrLn
+            getLine >>= handleInteraction client >>= putStrLn

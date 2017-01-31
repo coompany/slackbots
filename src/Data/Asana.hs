@@ -1,21 +1,12 @@
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Data.Asana (
-    Token(..),
-    TokenType(..),
-    Request(..),
-    Empty,
-    Project(..),
-    Task(..),
-    Workspace(..),
-    Webhook(..),
-    WebhookNew(..),
-    WebhookNewRequest,
-    Events(..), Event(..)
-) where
+module Data.Asana where
 
 import           Data.Aeson
+import           Data.Function   (on)
+import qualified Data.Text       as T (unpack)
+import           Data.Time.Clock (UTCTime (..))
 import           GHC.Generics
 import qualified Utils
 
@@ -30,11 +21,17 @@ instance FromJSON Project where
 
 
 data Task = Task {
-    taskId   :: Int,
-    taskName :: String
+    taskId          :: Int,
+    taskName        :: String,
+    taskCompleted   :: Bool,
+    taskCompletedAt :: Maybe UTCTime
 } deriving Show
 instance FromJSON Task where
-    parseJSON = Utils.parseIdName Task
+    parseJSON = withObject "task" $ \o ->
+        Task <$> o .: "id"
+             <*> o .: "name"
+             <*> o .: "completed"
+             <*> o .:? "completed_at"
 
 
 data Workspace = Workspace {
@@ -67,6 +64,28 @@ instance ToJSON WebhookNew where
         object [ "resource" .= resource, "target" .= target ]
 
 
+data User = User {
+    userId   :: Int,
+    userName :: String
+} deriving (Show)
+instance FromJSON User where
+    parseJSON = Utils.parseIdName User
+
+
+data Story = Story {
+    storyId   :: Int,
+    storyText :: String,
+    storyBy   :: User,
+    storyAt   :: UTCTime
+} deriving (Show)
+instance FromJSON Story where
+    parseJSON = withObject "story" $ \o ->
+        Story <$> o .: "id"
+              <*> o .: "text"
+              <*> o .: "created_by"
+              <*> o .: "created_at"
+
+
 -- Empty type holds empty objects and is used for empty replies
 data Empty = Empty deriving (Show)
 instance FromJSON Empty where
@@ -77,18 +96,41 @@ instance FromJSON Empty where
 newtype Events = Events { events :: [Event] } deriving (Show, Generic)
 instance FromJSON Events
 
+data EventType = TaskEvent | StoryEvent | ProjectEvent deriving (Show, Eq)
+instance FromJSON EventType where
+    parseJSON (String s) = case s of
+        "task"    -> return TaskEvent
+        "project" -> return ProjectEvent
+        "story"   -> return StoryEvent
+        _         -> fail ("unrecognized event type " ++ T.unpack s)
+
+data ActionType = AddedAction | RemovedAction | ChangedAction
+                | DeletedAction deriving (Show, Eq)
+instance FromJSON ActionType where
+    parseJSON (String s) = case s of
+        "changed" -> return ChangedAction
+        "added"   -> return AddedAction
+        "removed" -> return RemovedAction
+        "deleted" -> return DeletedAction
+        _         -> fail ("unrecognized action type " ++ T.unpack s)
+
 data Event = Event {
     eventResource :: Int,
     eventUser     :: Int,
-    eventType     :: String,
-    eventAction   :: String
-} deriving (Show)
+    eventType     :: EventType,
+    eventAction   :: ActionType
+} deriving (Show, Eq)
 instance FromJSON Event where
     parseJSON = withObject "event" $ \o ->
         Event <$> o .: "resource"
               <*> o .: "user"
               <*> o .: "type"
               <*> o .: "action"
+
+-- This definition makes so that events are sorted on the resource id,
+-- effectively filtering out events with the same resource id to build a Set.
+instance Ord Event where
+    compare = compare `on` eventResource
 
 
 -- Generic request definition (all requests have a single `data` property)

@@ -25,13 +25,18 @@ module Asana (
 import           Data.Asana
 import qualified Utils
 
+import           Control.Monad            (when)
 import           Control.Monad.IO.Class   (liftIO)
 import           Data.Aeson
 import           Data.Aeson.Types         (parseEither)
+import           Data.Foldable            (traverse_)
 import           Data.List                (intercalate)
 import qualified Data.Map.Strict          as Map
 import           Data.Proxy               (Proxy (..))
-import           Data.Text                (pack)
+import qualified Data.Set                 as Set
+import qualified Data.Text                as T (pack)
+import           Data.Time.Clock          (UTCTime (..), diffUTCTime,
+                                           getCurrentTime)
 import           Network.HTTP.Media       ((//))
 import           Network.Wai.Handler.Warp (run)
 import           Servant
@@ -58,8 +63,8 @@ instance (FromJSON a) => MimeUnrender DataJSON a where
 
 -- Use OAuth token data-type as HTTP header
 instance ToHttpApiData Token where
-    toUrlPiece (Token Nothing tok)       = pack tok
-    toUrlPiece (Token (Just Bearer) tok) = pack $ "Bearer " ++ tok
+    toUrlPiece (Token Nothing tok)       = T.pack tok
+    toUrlPiece (Token (Just Bearer) tok) = T.pack $ "Bearer " ++ tok
 
 
 -- API description
@@ -75,17 +80,27 @@ type AsanaAPI =
             :<|> ReqBody '[DataJSON] WebhookNewRequest :> Post '[DataJSON] Webhook
             :<|> Capture "webhookId" Int :> Delete '[DataJSON] Empty
             )
+        :<|> "tasks" :> Capture "taskId" Int :>
+            (    Get '[DataJSON] Task
+            :<|> "stories" :> Get '[DataJSON] [Story]
+            )
+        :<|> "stories" :> Capture "storyId" Int :> Get '[DataJSON] Story
         )
 
 -- Client description
+data TasksClient = TasksClient {
+    getTask     :: ClientM Task,
+    taskStories :: ClientM [Story] }
+
 data AsanaClient = AsanaClient {
-    projects     :: ClientM [Project],
-    projectTasks :: Int -> ClientM [Task],
-    workspaces   :: ClientM [Workspace],
-    webhooks     :: Maybe Int -> ClientM [Webhook],
-    newWebhook   :: WebhookNewRequest -> ClientM Webhook,
-    delWebhook   :: Int -> ClientM Empty
-}
+    projects      :: ClientM [Project],
+    projectTasks  :: Int -> ClientM [Task],
+    workspaces    :: ClientM [Workspace],
+    webhooks      :: Maybe Int -> ClientM [Webhook],
+    newWebhook    :: WebhookNewRequest -> ClientM Webhook,
+    delWebhook    :: Int -> ClientM Empty,
+    mkTasksClient :: Int -> TasksClient,
+    getStory      :: Int -> ClientM Story }
 
 
 
@@ -95,11 +110,18 @@ api = Proxy
 -- Build a client given a token
 mkClient :: Token -> AsanaClient
 mkClient token = AsanaClient{..}
-    where (projects :<|> projectTasks)
+    where
+        (projects :<|> projectTasks)
             :<|> workspaces
             :<|> (webhooks
                 :<|> newWebhook
-                :<|> delWebhook) = client api $ Just token
+                :<|> delWebhook)
+            :<|> tasksClient
+            :<|> getStory = client api $ Just token
+        -- Build a TasksClient given a task id
+        mkTasksClient tid = TasksClient{..}
+            where
+                getTask :<|> taskStories = tasksClient tid
 
 -- Get the right client environment to run the API client
 clientEnv :: IO ClientEnv
@@ -135,33 +157,50 @@ type ServerAPI =
 instance MimeUnrender OctetStream (Maybe Events) where
    mimeUnrender _ _ = Right Nothing
 
-server :: Server ServerAPI
+server :: AsanaClient -> Server ServerAPI
 server = handleWebhook
 
-handleWebhook :: Maybe String ->  -- XHookSecHeader
+handleWebhook :: AsanaClient  ->
+                 Maybe String ->  -- XHookSecHeader
                  Maybe String ->  -- XHookSigHeader
                  Maybe Events ->  -- ReqBody
                  Handler (Headers '[XHookSecHeader] NoContent)
 -- Handle webhook creation POST with secret.
-handleWebhook (Just secret) _ _ = return $ addHeader secret NoContent
+handleWebhook _ (Just secret) _ _ = return $ addHeader secret NoContent
 -- Handle webhook events.
-handleWebhook _ (Just signature) (Just (Events events)) = do
-    liftIO $ putStrLn $ show signature ++ "\n\n" ++ prettyEvents
+handleWebhook client _ (Just signature) (Just (Events events)) = do
+    let evtSet = Set.fromList events
+    liftIO $ do
+        putStrLn $ show signature ++ "\n\n" ++ prettyEvents evtSet
+        mapM_ actOnEvent evtSet
     return $ addHeader "" NoContent
     where
         prettyEvent (Event res usr ty act) =
             "Resource:\t" ++ show res ++ "\n" ++
             "User:\t" ++ show usr ++ "\n" ++
-            "Type:\t" ++ ty ++ "\n" ++
-            "Action:\t" ++ act
-        prettyEvents = intercalate "\n\n" $ map prettyEvent events
+            "Type:\t" ++ show ty ++ "\n" ++
+            "Action:\t" ++ show act
+        prettyEvents = intercalate ("\n" ++ replicate 30 '-' ++ "\n") .
+                                   map prettyEvent . Set.toList
+        actOnEvent (Event res usr TaskEvent AddedAction) =
+            putStrLn $ "New Task added! [" ++ show res ++ "]"
+        actOnEvent (Event taskId usr TaskEvent ChangedAction) =
+            let request = getTask (mkTasksClient client taskId)
+            in traverse_ withTask =<< mkRequest request Just (const Nothing)
+            where
+                withTask (Task _ name _ (Just completedAt)) = do
+                    currentTime <- getCurrentTime
+                    when (diffUTCTime currentTime completedAt < 60) <$>
+                        putStrLn $ "Task " ++ name ++ " completed!"
+                withTask _ = return ()
+        actOnEvent _ = return ()
 
 
 serverAPI :: Proxy ServerAPI
 serverAPI = Proxy
 
-app :: Application
-app = serve serverAPI server
+app :: AsanaClient -> Application
+app client = serve serverAPI (server client)
 
-runServer :: Int -> IO ()
-runServer port = run port app
+runServer :: Int -> AsanaClient -> IO ()
+runServer port client = run port (app client)
