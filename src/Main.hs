@@ -5,8 +5,12 @@ import qualified Slack
 
 import           Control.Concurrent
 import           Control.Concurrent.MVar
-import           Control.Monad           (forever)
+import           Control.Monad           (forever, when)
+import           Data.Foldable           (traverse_)
 import           Data.List               (intercalate)
+import qualified Data.Set                as Set
+import           Data.Time.Clock         (UTCTime (..), diffUTCTime,
+                                          getCurrentTime)
 import           Servant
 import           Servant.Client
 import           System.Environment      (getEnv)
@@ -18,10 +22,6 @@ asanaClient :: IO Asana.AsanaClient
 asanaClient = do
     t <- getEnv "ASANA_TOKEN"
     return $ Asana.mkClient (Asana.Token (Just Asana.Bearer) t)
-
-
-mkAsanaRequest :: ClientM a -> (a -> String) -> IO String
-mkAsanaRequest cm f = Asana.mkRequest cm f (\e -> "Error:\n" ++ show e)
 
 
 handleInteraction :: Asana.AsanaClient -> String -> IO String
@@ -49,6 +49,7 @@ handleInteraction client input = case input of
             mkAsanaRequest request show
         _ -> return "Unrecognized option"
     where
+        mkAsanaRequest cm f = Asana.mkRequest cm f (\e -> "Error:\n" ++ show e)
         getInput q = putStrLn q >>= return getLine
         prettyPrintList f xs = intercalate "\n\n" $ map f xs
 
@@ -80,20 +81,47 @@ waitForServer serverCom = do
         else waitForServer serverCom
 
 
+webhookHandler :: Asana.AsanaClient -> Asana.WebhookHandler ()
+webhookHandler client events = do
+    let evtSet = Set.fromList events
+    putStrLn $ prettyEvents evtSet
+    mapM_ actOnEvent evtSet
+    where
+        prettyEvent (Asana.Event res usr ty act) =
+            "Resource:\t" ++ show res ++ "\n" ++
+            "User:\t" ++ show usr ++ "\n" ++
+            "Type:\t" ++ show ty ++ "\n" ++
+            "Action:\t" ++ show act
+        prettyEvents = intercalate ("\n" ++ replicate 30 '-' ++ "\n") .
+                                   map prettyEvent . Set.toList
+        actOnEvent (Asana.Event res usr Asana.TaskEvent Asana.AddedAction) =
+            putStrLn $ "New Task added! [" ++ show res ++ "]"
+        actOnEvent (Asana.Event taskId usr Asana.TaskEvent Asana.ChangedAction) =
+            let request = Asana.getTask (Asana.mkTasksClient client taskId)
+            in traverse_ withTask =<< Asana.mkRequest request Just (const Nothing)
+            where
+                withTask (Asana.Task _ name _ (Just completedAt)) = do
+                    currentTime <- getCurrentTime
+                    when (diffUTCTime currentTime completedAt < 60) <$>
+                        putStrLn $ "Task " ++ name ++ " completed!"
+                withTask _ = return ()
+        actOnEvent _ = return ()
+
+
 main :: IO ()
 main = do
     startSlack
     withClient <- asanaClient
-    serverCom <- handleServerStart withClient
+    serverCom <- startWebhookServer (webhookHandler withClient)
     forever (interaction withClient)
     where
         startSlack = do
             token <- getEnv "SLACK_TOKEN"
             threadId <- forkIO $ Slack.startListeningDefault token
             putStrLn $ "Slack bot running in " ++ show threadId
-        handleServerStart client = do
+        startWebhookServer handler = do
             sc <- newMVar False
-            threadId <- forkFinally (Asana.runServer 8080 client)
+            threadId <- forkFinally (Asana.runServer 8080 handler)
                                     (onTermination sc)
             putStrLn $ "Server runnning in " ++ show threadId
             return sc

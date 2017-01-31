@@ -15,28 +15,28 @@ module Asana (
     Workspace(..),
     Webhook(..),
     WebhookNew(..),
+    Event(..),
+    EventType(..),
+    ActionType(..),
     AsanaClient(..),
+    TasksClient(..),
     clientEnv,
     mkClient,
     mkRequest,
-    runServer
+    runServer,
+    WebhookHandler,
 ) where
 
 import           Data.Asana
 import qualified Utils
 
-import           Control.Monad            (when)
 import           Control.Monad.IO.Class   (liftIO)
 import           Data.Aeson
 import           Data.Aeson.Types         (parseEither)
-import           Data.Foldable            (traverse_)
 import           Data.List                (intercalate)
 import qualified Data.Map.Strict          as Map
 import           Data.Proxy               (Proxy (..))
-import qualified Data.Set                 as Set
 import qualified Data.Text                as T (pack)
-import           Data.Time.Clock          (UTCTime (..), diffUTCTime,
-                                           getCurrentTime)
 import           Network.HTTP.Media       ((//))
 import           Network.Wai.Handler.Warp (run)
 import           Servant
@@ -157,50 +157,30 @@ type ServerAPI =
 instance MimeUnrender OctetStream (Maybe Events) where
    mimeUnrender _ _ = Right Nothing
 
-server :: AsanaClient -> Server ServerAPI
+
+type WebhookHandler a = [Event] -> IO a
+
+server :: WebhookHandler a -> Server ServerAPI
 server = handleWebhook
 
-handleWebhook :: AsanaClient  ->
-                 Maybe String ->  -- XHookSecHeader
-                 Maybe String ->  -- XHookSigHeader
-                 Maybe Events ->  -- ReqBody
-                 Handler (Headers '[XHookSecHeader] NoContent)
+handleWebhook :: WebhookHandler a
+              -> Maybe String       -- XHookSecHeader
+              -> Maybe String       -- XHookSigHeader
+              -> Maybe Events       -- ReqBody
+              -> Handler (Headers '[XHookSecHeader] NoContent)
 -- Handle webhook creation POST with secret.
 handleWebhook _ (Just secret) _ _ = return $ addHeader secret NoContent
--- Handle webhook events.
-handleWebhook client _ (Just signature) (Just (Events events)) = do
-    let evtSet = Set.fromList events
-    liftIO $ do
-        putStrLn $ show signature ++ "\n\n" ++ prettyEvents evtSet
-        mapM_ actOnEvent evtSet
+-- Handle webhook events by piping them to the handler.
+handleWebhook handler _ (Just signature) (Just (Events events)) = do
+    liftIO $ handler events
     return $ addHeader "" NoContent
-    where
-        prettyEvent (Event res usr ty act) =
-            "Resource:\t" ++ show res ++ "\n" ++
-            "User:\t" ++ show usr ++ "\n" ++
-            "Type:\t" ++ show ty ++ "\n" ++
-            "Action:\t" ++ show act
-        prettyEvents = intercalate ("\n" ++ replicate 30 '-' ++ "\n") .
-                                   map prettyEvent . Set.toList
-        actOnEvent (Event res usr TaskEvent AddedAction) =
-            putStrLn $ "New Task added! [" ++ show res ++ "]"
-        actOnEvent (Event taskId usr TaskEvent ChangedAction) =
-            let request = getTask (mkTasksClient client taskId)
-            in traverse_ withTask =<< mkRequest request Just (const Nothing)
-            where
-                withTask (Task _ name _ (Just completedAt)) = do
-                    currentTime <- getCurrentTime
-                    when (diffUTCTime currentTime completedAt < 60) <$>
-                        putStrLn $ "Task " ++ name ++ " completed!"
-                withTask _ = return ()
-        actOnEvent _ = return ()
 
 
 serverAPI :: Proxy ServerAPI
 serverAPI = Proxy
 
-app :: AsanaClient -> Application
-app client = serve serverAPI (server client)
+app :: WebhookHandler a -> Application
+app handler = serve serverAPI (server handler)
 
-runServer :: Int -> AsanaClient -> IO ()
-runServer port client = run port (app client)
+runServer :: Int -> WebhookHandler a -> IO ()
+runServer port handler = run port (app handler)
