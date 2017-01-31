@@ -18,19 +18,23 @@ module Asana (
     AsanaClient(..),
     clientEnv,
     mkClient,
-    mkRequest
+    mkRequest,
+    runServer
 ) where
 
 import           Data.Asana
 import qualified Utils
 
-import           Data.Aeson         (FromJSON (..), ToJSON (..), Value, decode,
-                                     encode)
-import           Data.Aeson.Types   (parseEither)
-import qualified Data.Map.Strict    as Map
-import           Data.Proxy         (Proxy (..))
-import           Data.Text          (pack)
-import           Network.HTTP.Media ((//))
+import           Control.Monad.IO.Class   (liftIO)
+import           Data.Aeson
+import           Data.Aeson.Types         (parseEither)
+import           Data.List                (intercalate)
+import qualified Data.Map.Strict          as Map
+import           Data.Proxy               (Proxy (..))
+import           Data.Text                (pack)
+import           Network.HTTP.Media       ((//))
+import           Network.Wai.Handler.Warp (run)
+import           Servant
 import           Servant.API
 import           Servant.Client
 
@@ -105,3 +109,59 @@ mkRequest :: ClientM a -> (a -> b) -> (ServantError -> b) -> IO b
 mkRequest cm f g = do
     ce <- clientEnv
     Utils.mkRequest ce cm f g
+
+
+-- | The API to receive webhooks makes it so that the description in Servant is
+-- somewhat counterintuitive. When you create a new webhook, Asana will POST to
+-- the provided URL with an `X-Hook-Secret` header to which the server has to
+-- reply with an empty body 200 and the same header. Later, webhook events are
+-- sent to the same endpoint in JSON. We cannot describe two separate endpoints
+-- in Servant because always the first will match, failing in one of the two
+-- request cases. This is solved with a single endpoint that accepts both
+-- requests without `Content-Type` (with `OctetStream`) and JSON requests.
+-- We also need to specify an optional body with `Maybe`.
+
+type XHookSecHeader = Header "X-Hook-Secret" String
+type XHookSigHeader = Header "X-Hook-Signature" String
+
+type ServerAPI =
+    "webhooks" :> XHookSecHeader
+               :> XHookSigHeader
+               :> ReqBody '[JSON, OctetStream] (Maybe Events)
+               :> Post '[JSON] (Headers '[XHookSecHeader] NoContent)
+
+-- This dummy instance parses `Maybe Events` when `Content-Type` is
+-- `OctetStream`. Always returns `Nothing`.
+instance MimeUnrender OctetStream (Maybe Events) where
+   mimeUnrender _ _ = Right Nothing
+
+server :: Server ServerAPI
+server = handleWebhook
+
+handleWebhook :: Maybe String ->  -- XHookSecHeader
+                 Maybe String ->  -- XHookSigHeader
+                 Maybe Events ->  -- ReqBody
+                 Handler (Headers '[XHookSecHeader] NoContent)
+-- Handle webhook creation POST with secret.
+handleWebhook (Just secret) _ _ = return $ addHeader secret NoContent
+-- Handle webhook events.
+handleWebhook _ (Just signature) (Just (Events events)) = do
+    liftIO $ putStrLn $ show signature ++ "\n\n" ++ prettyEvents
+    return $ addHeader "" NoContent
+    where
+        prettyEvent (Event res usr ty act) =
+            "Resource:\t" ++ show res ++ "\n" ++
+            "User:\t" ++ show usr ++ "\n" ++
+            "Type:\t" ++ ty ++ "\n" ++
+            "Action:\t" ++ act
+        prettyEvents = intercalate "\n\n" $ map prettyEvent events
+
+
+serverAPI :: Proxy ServerAPI
+serverAPI = Proxy
+
+app :: Application
+app = serve serverAPI server
+
+runServer :: Int -> IO ()
+runServer port = run port app

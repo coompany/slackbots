@@ -1,12 +1,11 @@
 module Main where
 
 import qualified Asana
-import           Server
 import qualified Slack
 
 import           Control.Concurrent
 import           Control.Concurrent.MVar
-import           Control.Monad           (forever, void)
+import           Control.Monad           (forever)
 import           Data.List               (intercalate)
 import           Servant
 import           Servant.Client
@@ -85,7 +84,7 @@ waitForServer serverCom = do
 
 main :: IO ()
 main = do
-    void startSlack
+    startSlack
     serverCom <- handleServerStart
     forever interaction
     where
@@ -95,8 +94,8 @@ main = do
             putStrLn $ "Slack bot running in " ++ show threadId
         handleServerStart = do
             sc <- newMVar False
-            threadId <- forkFinally (runServer 8080) (onTermination sc)
-            putStrLn $ "Server runnning in threadId " ++ show threadId
+            threadId <- forkFinally (Asana.runServer 8080) (onTermination sc)
+            putStrLn $ "Server runnning in " ++ show threadId
             return sc
         interaction = do
             putStrLn "\nAsana explorer:\n\
