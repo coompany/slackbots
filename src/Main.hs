@@ -137,7 +137,8 @@ main = do
                                  `fmap` getEnv "ASANA_TOKEN"
         startSlack = do
             token <- getEnv "SLACK_TOKEN"
-            threadId <- forkIO $ S.startListening token rtmListener
+            threadId <- forkFinally (S.startListening token rtmListener) $
+                    either (putStrLn . (++) "Slack bot crashed: " . show) return
             putStrLn $ "Slack bot running in " ++ show threadId
         startWebhookServer handler = do
             sc <- newMVar False

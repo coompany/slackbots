@@ -21,7 +21,8 @@ module Slack (
 
 import qualified Utils
 
-import           Control.Monad      (forever, void)
+import           Control.Exception  (throw)
+import           Control.Monad      (forever)
 import           Data.Aeson
 import           Data.Foldable      (traverse_)
 import qualified Data.Map.Strict    as Map
@@ -41,7 +42,7 @@ import           Wuss               (runSecureClient)
 
 
 data SelfInfo = SelfInfo
-    { selfId :: String
+    { selfId   :: String
     , selfName :: String
     } deriving (Show)
 instance FromJSON SelfInfo where
@@ -184,17 +185,16 @@ type RTMListener a = SelfInfo -> TeamInfo -> UsersMap -> ChannelsMap -> EventHan
 -- Initiate an RTM WebSockets channel. Accepts a token and an RTMListener.
 startListening :: String -> RTMListener a -> IO ()
 startListening token rtmListener =
-    void $ mkRequest (rtmStart (Just token)) onSuc onErr
-    where
-        onErr err = putStrLn $ "Error:\n" ++ show err
-        onSuc rtm@(RtmStartReply url self team users chs) =
-            print rtm >> case parseURI url of
+    mkRequest (rtmStart (Just token)) Right Left >>= \case
+        Left err -> throw err
+        Right rtm@(RtmStartReply url self team users chs) ->
+            case parseURI url of
                 Just (URI _ (Just (URIAuth _ host _)) path _ _) ->
                     let usersMap = buildUsersMap users
                         channelsMap = buildChannelsMap chs
-                        wsHandler = wsApp $ rtmListener self team usersMap channelsMap
-                    in runSecureClient host 443 path wsHandler
-                Nothing -> putStrLn "URI not parseable"
+                        handler = rtmListener self team usersMap channelsMap
+                    in runSecureClient host 443 path (wsApp handler)
+                Nothing -> error "RTM reply URI not parseable"
 
 -- Pipes parsed events received over a ws connection into an EventHandler.
 wsApp :: EventHandler a -> WS.ClientApp ()
