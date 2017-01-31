@@ -8,23 +8,24 @@ module Slack (
     clientEnv,
     mkRequest,
     startListening,
-    startListeningDefault,
     EventHandler, RTMListener,
+    SelfInfo(..),
     ChannelInfo(..),
     UserInfo(..),
     TeamInfo(..),
     RtmStartReply(..),
-    Event(..)
+    Event(..),
+    MessageSubtype(..),
+    lookupIndex
 ) where
 
 import qualified Utils
 
-import           Control.Monad      (forever)
+import           Control.Monad      (forever, void)
 import           Data.Aeson
 import           Data.Foldable      (traverse_)
 import qualified Data.Map.Strict    as Map
 import           Data.Maybe         (fromMaybe)
-import           Data.List          (isInfixOf)
 import           Data.Proxy         (Proxy (..))
 import qualified Data.Text          as T
 import qualified Data.Text.IO       as T
@@ -183,9 +184,10 @@ type RTMListener a = SelfInfo -> TeamInfo -> UsersMap -> ChannelsMap -> EventHan
 -- Initiate an RTM WebSockets channel. Accepts a token and an RTMListener.
 startListening :: String -> RTMListener a -> IO ()
 startListening token rtmListener =
-    mkRequest (rtmStart (Just token)) Right Left >>= \case
-        Left err -> putStrLn $ "Error:\n" ++ show err
-        Right rtm@(RtmStartReply url self team users chs) ->
+    void $ mkRequest (rtmStart (Just token)) onSuc onErr
+    where
+        onErr err = putStrLn $ "Error:\n" ++ show err
+        onSuc rtm@(RtmStartReply url self team users chs) =
             print rtm >> case parseURI url of
                 Just (URI _ (Just (URIAuth _ host _)) path _ _) ->
                     let usersMap = buildUsersMap users
@@ -199,27 +201,3 @@ wsApp :: EventHandler a -> WS.ClientApp ()
 wsApp evtHandler conn = forever $ do
     msg <- WS.receiveData conn
     traverse_ evtHandler (decode msg :: Maybe Event)
-
-startListeningDefault :: String -> IO ()
-startListeningDefault token = startListening token defaultRTMListener
-
-defaultRTMListener :: RTMListener ()
-defaultRTMListener self team users chans = \case
-    (MessageEvt ch us tx ts Nothing) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++
-            if selfId self `isInfixOf` tx
-                then " mentioned " ++ selfName self ++ " [" ++ tx ++ "]"
-                else " wrote " ++ tx
-    (MessageEvt ch us tx ts (Just MeMessage)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is " ++ tx
-    (MessageEvt ch us tx ts (Just ChannelJoin)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " joined"
-    (MessageEvt ch us tx ts (Just ChannelLeave)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " left"
-    (UserTypingEvt ch us) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is typing"
-    where
-        lookupUsers = lookupIndex users
-        lookupChans = lookupIndex chans
-        getUserName = lookupUsers userName "An unknown user"
-        getChanName = (:) '#' . lookupChans channelName "UNKNOWN"

@@ -1,13 +1,15 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Main where
 
 import qualified Asana                   as A
-import qualified Slack
+import qualified Slack                   as S
 
 import           Control.Concurrent
 import           Control.Concurrent.MVar
 import           Control.Monad           (forever, when)
 import           Data.Foldable           (traverse_)
-import           Data.List               (intercalate)
+import           Data.List               (intercalate, isInfixOf)
 import qualified Data.Set                as Set
 import           Data.Time.Clock         (UTCTime (..), diffUTCTime,
                                           getCurrentTime)
@@ -102,6 +104,28 @@ webhookHandler client events = do
         actOnEvent _ = return ()
 
 
+rtmListener :: S.RTMListener ()
+rtmListener self team users chans = \case
+    (S.MessageEvt ch us tx ts Nothing) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++
+            if S.selfId self `isInfixOf` tx
+                then " mentioned " ++ S.selfName self ++ " [" ++ tx ++ "]"
+                else " wrote " ++ tx
+    (S.MessageEvt ch us tx ts (Just S.MeMessage)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is " ++ tx
+    (S.MessageEvt ch us tx ts (Just S.ChannelJoin)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " joined"
+    (S.MessageEvt ch us tx ts (Just S.ChannelLeave)) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " left"
+    (S.UserTypingEvt ch us) ->
+        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is typing"
+    where
+        lookupUsers = S.lookupIndex users
+        lookupChans = S.lookupIndex chans
+        getUserName = lookupUsers S.userName "An unknown user"
+        getChanName = (:) '#' . lookupChans S.channelName "UNKNOWN"
+
+
 main :: IO ()
 main = do
     startSlack
@@ -113,7 +137,7 @@ main = do
                                  `fmap` getEnv "ASANA_TOKEN"
         startSlack = do
             token <- getEnv "SLACK_TOKEN"
-            threadId <- forkIO $ Slack.startListeningDefault token
+            threadId <- forkIO $ S.startListening token rtmListener
             putStrLn $ "Slack bot running in " ++ show threadId
         startWebhookServer handler = do
             sc <- newMVar False
