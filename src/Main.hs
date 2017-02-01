@@ -2,21 +2,23 @@
 
 module Main where
 
-import qualified Asana                   as A
-import qualified Slack                   as S
+import qualified Asana                     as A
+import qualified Slack                     as S
 
+import           Control.Applicative       (empty)
 import           Control.Concurrent
 import           Control.Concurrent.MVar
-import           Control.Monad           (forever, when)
-import           Data.Foldable           (traverse_)
-import           Data.List               (intercalate, isInfixOf)
-import qualified Data.Set                as Set
-import           Data.Time.Clock         (UTCTime (..), diffUTCTime,
-                                          getCurrentTime)
+import           Control.Monad             (forever, when)
+import           Control.Monad.Trans.Class (lift)
+import           Data.Foldable             (traverse_)
+import           Data.List                 (intercalate, isInfixOf)
+import qualified Data.Set                  as Set
+import           Data.Time.Clock           (UTCTime (..), diffUTCTime,
+                                            getCurrentTime)
 import           Servant
 import           Servant.Client
-import           System.Environment      (getEnv)
-import           System.Exit             (exitSuccess)
+import           System.Environment        (getEnv)
+import           System.Exit               (exitSuccess)
 
 
 
@@ -104,21 +106,26 @@ webhookHandler client events = do
         actOnEvent _ = return ()
 
 
-rtmListener :: S.RTMListener ()
+rtmListener :: S.RTMListener
 rtmListener self team users chans = \case
     (S.MessageEvt ch us tx ts Nothing) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++
-            if S.selfId self `isInfixOf` tx
-                then " mentioned " ++ S.selfName self ++ " [" ++ tx ++ "]"
-                else " wrote " ++ tx
-    (S.MessageEvt ch us tx ts (Just S.MeMessage)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is " ++ tx
-    (S.MessageEvt ch us tx ts (Just S.ChannelJoin)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " joined"
-    (S.MessageEvt ch us tx ts (Just S.ChannelLeave)) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " left"
-    (S.UserTypingEvt ch us) ->
-        putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is typing"
+        if S.selfId self `isInfixOf` tx
+        then lift $ return (S.MessageReply 1 ch ("Hello <@" ++ us ++ ">"))
+        else do
+            lift $ putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " wrote " ++ tx
+            empty
+    (S.MessageEvt ch us tx ts (Just S.MeMessage)) -> do
+        lift $ putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is " ++ tx
+        empty
+    (S.MessageEvt ch us tx ts (Just S.ChannelJoin)) -> do
+        lift $ putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " joined"
+        empty
+    (S.MessageEvt ch us tx ts (Just S.ChannelLeave)) -> do
+        lift $ putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " left"
+        empty
+    (S.UserTypingEvt ch us) -> do
+        lift $ putStrLn $ getChanName ch ++ ": " ++ getUserName us ++ " is typing"
+        empty
     where
         lookupUsers = S.lookupIndex users
         lookupChans = S.lookupIndex chans

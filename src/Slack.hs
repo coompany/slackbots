@@ -16,28 +16,31 @@ module Slack (
     RtmStartReply(..),
     Event(..),
     MessageSubtype(..),
+    MessageReply(..),
     lookupIndex
 ) where
 
 import qualified Utils
 
-import           Control.Exception  (throw)
-import           Control.Monad      (forever)
+import           Control.Exception         (throw)
+import           Control.Monad             (forever, void)
+import           Control.Monad.Trans.Class (lift)
+import           Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import           Data.Aeson
-import           Data.Foldable      (traverse_)
-import qualified Data.Map.Strict    as Map
-import           Data.Maybe         (fromMaybe)
-import           Data.Proxy         (Proxy (..))
-import qualified Data.Text          as T
-import qualified Data.Text.IO       as T
-import           Data.Time.Calendar (fromGregorian)
-import           Data.Time.Clock    (UTCTime (..), secondsToDiffTime)
-import           Data.Time.Format   (defaultTimeLocale, parseTimeM)
-import           Network.URI        (URI (..), URIAuth (..), parseURI)
-import qualified Network.WebSockets as WS
+import           Data.Foldable             (traverse_)
+import qualified Data.Map.Strict           as Map
+import           Data.Maybe                (fromMaybe)
+import           Data.Proxy                (Proxy (..))
+import qualified Data.Text                 as T
+import qualified Data.Text.IO              as T
+import           Data.Time.Calendar        (fromGregorian)
+import           Data.Time.Clock           (UTCTime (..), secondsToDiffTime)
+import           Data.Time.Format          (defaultTimeLocale, parseTimeM)
+import           Network.URI               (URI (..), URIAuth (..), parseURI)
+import qualified Network.WebSockets        as WS
 import           Servant.API
 import           Servant.Client
-import           Wuss               (runSecureClient)
+import           Wuss                      (runSecureClient)
 
 
 
@@ -178,12 +181,18 @@ buildChannelsMap :: [ChannelInfo] -> ChannelsMap
 buildChannelsMap = buildResourceMap channelId
 
 
+data MessageReply = MessageReply Int String String deriving (Show)
+instance ToJSON MessageReply where
+    toJSON (MessageReply i chan txt) =
+        object [ "id" .= i, "channel" .= chan, "text" .= txt, "type" .= ty ]
+        where ty = "message" :: String
+
 -- Names for those types should be self descriptive.
-type EventHandler a = Event -> IO a
-type RTMListener a = SelfInfo -> TeamInfo -> UsersMap -> ChannelsMap -> EventHandler a
+type EventHandler = Event -> MaybeT IO MessageReply
+type RTMListener = SelfInfo -> TeamInfo -> UsersMap -> ChannelsMap -> EventHandler
 
 -- Initiate an RTM WebSockets channel. Accepts a token and an RTMListener.
-startListening :: String -> RTMListener a -> IO ()
+startListening :: String -> RTMListener -> IO ()
 startListening token rtmListener =
     mkRequest (rtmStart (Just token)) Right Left >>= \case
         Left err -> throw err
@@ -196,8 +205,14 @@ startListening token rtmListener =
                     in runSecureClient host 443 path (wsApp handler)
                 Nothing -> error "RTM reply URI not parseable"
 
--- Pipes parsed events received over a ws connection into an EventHandler.
-wsApp :: EventHandler a -> WS.ClientApp ()
+-- Pipes parsed events received over a ws connection into an EventHandler. The
+-- return value of the handler (if any) is encoded into a message object and
+-- then sent over the ws connection.
+wsApp :: EventHandler -> WS.ClientApp ()
 wsApp evtHandler conn = forever $ do
     msg <- WS.receiveData conn
-    traverse_ evtHandler (decode msg :: Maybe Event)
+    void $ case decode msg :: Maybe Event of
+        Just evt -> runMaybeT $ evtHandler evt >>= sendReply
+        Nothing  -> return Nothing
+    where
+        sendReply reply = lift $ print reply >> WS.sendTextData conn (encode reply)
