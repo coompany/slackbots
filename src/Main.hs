@@ -6,8 +6,7 @@ import qualified Asana                     as A
 import qualified Slack                     as S
 
 import           Control.Applicative       (empty)
-import           Control.Concurrent
-import           Control.Concurrent.MVar
+import           Control.Concurrent        (forkFinally)
 import           Control.Monad             (forever, when)
 import           Control.Monad.Trans.Class (lift)
 import           Data.Foldable             (traverse_)
@@ -62,21 +61,6 @@ handleInteraction client input = case input of
         showTasks = prettyPrintList showTask
         showTask (A.Task id name _ _) =
             "ID:\t" ++ show id ++ "\nName:\t" ++ name
-
-
-onTermination :: (Show e, Show a) => MVar Bool -> Either e a -> IO ()
-onTermination serverCom eit = do
-    putMVar serverCom True
-    case eit of
-        Left e  -> error $ "ERROR: " ++ show e
-        Right a -> putStrLn $ "END: " ++ show a
-
-waitForServer :: MVar Bool -> IO ()
-waitForServer serverCom = do
-    sc <- takeMVar serverCom
-    if sc
-        then putStrLn "Server finished..."
-        else waitForServer serverCom
 
 
 webhookHandler :: A.AsanaClient -> A.WebhookHandler ()
@@ -135,24 +119,21 @@ rtmListener self team users chans = \case
 
 main :: IO ()
 main = do
-    startSlack
-    withClient <- asanaClient
-    serverCom <- startWebhookServer (webhookHandler withClient)
+    startSlack =<< getEnv "SLACK_TOKEN"
+    withClient <-  A.mkClient `fmap` A.Token (Just A.Bearer)
+                              `fmap` getEnv "ASANA_TOKEN"
+    startWebhookServer 8080 (webhookHandler withClient)
     forever (interaction withClient)
     where
-        asanaClient = A.mkClient `fmap` A.Token (Just A.Bearer)
-                                 `fmap` getEnv "ASANA_TOKEN"
-        startSlack = do
-            token <- getEnv "SLACK_TOKEN"
+        crashedHandler s = putStrLn . (++) (s ++ " crashed: ") .show
+        startSlack token = do
             threadId <- forkFinally (S.startListening token rtmListener) $
-                    either (putStrLn . (++) "Slack bot crashed: " . show) return
+                    either (crashedHandler "Slack bot") return
             putStrLn $ "Slack bot running in " ++ show threadId
-        startWebhookServer handler = do
-            sc <- newMVar False
-            threadId <- forkFinally (A.runServer 8080 handler)
-                                    (onTermination sc)
+        startWebhookServer port handler = do
+            threadId <- forkFinally (A.runServer port handler) $
+                    either (crashedHandler "Asana server") return
             putStrLn $ "Server runnning in " ++ show threadId
-            return sc
         interaction client = do
             putStrLn "\nAsana explorer:\n\
                      \1 - Print workspaces;\n\
